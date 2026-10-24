@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#FFFDF9">
+  <title>Familien-Einkaufszettel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Firebase Realtime SDK -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+  <style>
+    body {
+      background-color: #FFFDF9;
+      background-image: radial-gradient(#F3E8D6 1px, transparent 1px);
+      background-size: 20px 20px;
+      font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .soft-shadow {
+      box-shadow: 0 10px 25px -5px rgba(180, 140, 100, 0.12), 0 4px 10px -3px rgba(180, 140, 100, 0.08);
+    }
+    /* Weiche Animationen für Karten */
+    .item-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .no-scrollbar { scrollbar-width: none; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+
+    /* Avatare ploppen weich auf, wenn jemand neu dazukommt */
+    @keyframes avatar-pop {
+      0%   { transform: scale(0.3); opacity: 0; }
+      70%  { transform: scale(1.12); opacity: 1; }
+      100% { transform: scale(1); }
+    }
+    .avatar-pop { animation: avatar-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+    /* FAB: unten rechts, innerhalb der App-Spalte, im Daumen-Radius */
+    .fab {
+      right: max(1.25rem, calc((100vw - 28rem) / 2 + 1.25rem));
+      bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+    }
+    @keyframes fab-in {
+      0%   { transform: scale(0) rotate(-90deg); }
+      100% { transform: scale(1) rotate(0); }
+    }
+    .fab-in { animation: fab-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+    /* Kurzes Aufleuchten des Eingabefelds nach FAB-Tap */
+    .form-flash { box-shadow: 0 0 0 4px rgba(251, 146, 60, 0.45), 0 10px 25px -5px rgba(180, 140, 100, 0.12); }
+
+    /* Hinzufügen-Fenster: fährt von unten ein */
+    .sheet { transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
+    .sheet-closed { transform: translateY(110%); }
+  </style>
+</head>
+<body class="text-amber-950 min-h-screen flex justify-center">
+
+  <div class="w-full max-w-md min-h-screen flex flex-col p-4 sm:p-5">
+
+    <!-- SCREEN 1: LOGIN / FAMILIE BEITRETEN ODER GRÜNDEN -->
+    <div id="login-screen" class="hidden flex-1 flex flex-col justify-center my-auto">
+      <div class="bg-white p-6 sm:p-7 rounded-[2rem] soft-shadow border-2 border-orange-100">
+        
+        <div class="flex items-center gap-3 mb-5">
+          <div class="w-14 h-14 bg-orange-100 text-orange-600 rounded-2xl flex items-center justify-center text-3xl shadow-inner">
+            🧺
+          </div>
+          <div>
+            <h1 class="text-2xl font-extrabold text-amber-950 leading-tight">Familien-Korb</h1>
+            <p class="text-amber-700/70 text-sm font-semibold">Zusammen einfacher einkaufen</p>
+          </div>
+        </div>
+
+        <!-- Umschalter: Beitreten vs. Gründen -->
+        <div class="grid grid-cols-2 bg-orange-50/80 p-1.5 rounded-2xl mb-6 border border-orange-100">
+          <button type="button" id="tab-join" class="py-2.5 rounded-xl font-bold text-sm transition bg-white text-orange-600 shadow-sm">
+            Beitreten
+          </button>
+          <button type="button" id="tab-create" class="py-2.5 rounded-xl font-bold text-sm transition text-amber-800/60 hover:text-amber-900">
+            Familie gründen
+          </button>
+        </div>
+
+        <form id="login-form" class="space-y-4" novalidate>
+          <input type="hidden" id="auth-mode" value="join">
+
+          <!-- Hinweis, wenn jemand über einen Einladungslink kommt -->
+          <div id="invite-box" class="hidden bg-emerald-50 border-2 border-emerald-100 rounded-2xl px-4 py-3 text-emerald-900">
+            <p class="text-sm font-bold">Du wurdest eingeladen 🎉</p>
+            <p class="text-xl font-extrabold leading-tight" id="invite-family-name"></p>
+            <button type="button" id="invite-cancel" class="text-xs font-bold text-emerald-700/80 underline mt-1">
+              Stattdessen mit Familienname und PIN anmelden
+            </button>
+          </div>
+
+          <div id="family-field">
+            <label class="block text-xs font-extrabold uppercase tracking-wider text-amber-800/70 mb-1.5 ml-1">
+              Wie heißt eure Familie?
+            </label>
+            <div class="flex items-stretch rounded-2xl overflow-hidden border-2 border-orange-200 focus-within:border-orange-500 focus-within:ring-4 focus-within:ring-orange-100 transition bg-white">
+              <span class="bg-orange-100/90 text-orange-800 font-extrabold px-4 flex items-center text-base border-r border-orange-200 select-none">
+                Familie
+              </span>
+              <input type="text" id="family-name" placeholder="Gorn" autocomplete="off"
+                class="w-full px-3.5 py-3.5 bg-white outline-none text-base font-bold text-amber-950 placeholder-amber-900/30">
+            </div>
+            <p id="mode-hint" class="text-[12px] text-amber-700/60 mt-1.5 ml-1 font-medium">
+              Gib euren Nachnamen und die PIN eurer Familie ein.
+            </p>
+          </div>
+
+          <div id="pin-field">
+            <label class="block text-xs font-extrabold uppercase tracking-wider text-amber-800/70 mb-1.5 ml-1">
+              PIN <span class="text-amber-600/60 font-semibold lowercase">(4 Ziffern)</span>
+            </label>
+            <input type="password" id="family-pin" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="••••"
+              class="w-full px-4 py-3.5 rounded-2xl bg-white border-2 border-orange-200 focus:border-orange-500 focus:ring-4 focus:ring-orange-100 outline-none text-base font-extrabold tracking-[0.5em] text-amber-950 placeholder-amber-900/30 transition">
+            <p id="pin-hint" class="text-[12px] text-amber-700/60 mt-1.5 ml-1 font-medium">
+              Die PIN kennt jeder, der schon in eurer Familie ist.
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-extrabold uppercase tracking-wider text-amber-800/70 mb-1.5 ml-1">
+              Dein Name <span class="text-amber-600/60 font-semibold lowercase">(optional)</span>
+            </label>
+            <input type="text" id="user-name" placeholder="Leer lassen für Zufallsname 🎲" 
+              class="w-full px-4 py-3.5 rounded-2xl bg-orange-50/50 border-2 border-orange-100 focus:border-orange-400 focus:bg-white outline-none text-base font-semibold text-amber-950 placeholder-amber-900/35 transition">
+          </div>
+
+          <p id="login-error" role="alert" class="hidden text-sm font-bold text-red-700 bg-red-50 border border-red-100 rounded-xl px-3.5 py-2.5"></p>
+
+          <button type="submit" id="submit-login-btn"
+            class="w-full py-4 bg-orange-500 hover:bg-orange-600 active:scale-[0.98] disabled:opacity-60 text-white font-extrabold rounded-2xl shadow-md shadow-orange-500/20 transition text-base mt-2">
+            Zur Familienliste ➔
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- SCREEN 2: DIE EINKAUFSLISTE -->
+    <div id="list-screen" class="hidden flex-1 flex flex-col">
+      
+      <!-- Top Header -->
+      <header class="bg-white p-4 rounded-3xl soft-shadow border-2 border-orange-100 mb-4">
+        <!-- Zeile 1: Familienname + Avatar-Leiste -->
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <h1 class="text-xl font-extrabold text-amber-950 truncate" id="display-family">Familie Gorn</h1>
+            <button id="switch-family-btn" class="text-xs bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold px-2 py-0.5 rounded-lg transition shrink-0" title="Familie wechseln">
+              Wechseln
+            </button>
+            <button id="invite-btn" type="button" class="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-lg transition shrink-0" title="Per Link einladen" aria-label="Per Link einladen">
+              🔗 Einladen
+            </button>
+          </div>
+
+          <!-- Avatar-Leiste: wer ist gerade im Live-Zettel? -->
+          <div id="avatar-bar" class="flex items-center -space-x-2 shrink-0" aria-label="Aktive Familienmitglieder"></div>
+        </div>
+
+        <!-- Zeile 2: Status + Einkaufsmodus -->
+        <div class="flex items-center justify-between gap-2 mt-1.5">
+          <div class="flex items-center gap-2 min-w-0">
+            <p class="text-xs text-amber-800/70 font-semibold truncate">
+              Du: <span id="display-user" class="font-extrabold text-orange-600"></span>
+            </p>
+            <span class="text-stone-300">•</span>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <span id="live-indicator-dot" class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span id="live-indicator-text" class="text-[11px] font-bold text-emerald-600">Live</span>
+            </div>
+          </div>
+
+          <!-- Einkaufsmodus Button -->
+          <button id="shopping-mode-btn" class="px-3.5 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition shrink-0 shadow-sm">
+          </button>
+        </div>
+
+        <!-- Live-Banner wenn jemand einkaufen ist -->
+        <div id="shopping-banner" class="hidden mt-3 pt-3 border-t border-emerald-100 flex items-center justify-between bg-emerald-50/90 px-3.5 py-2.5 rounded-2xl text-emerald-900">
+          <div class="flex items-center gap-2.5">
+            <span class="relative flex h-3 w-3 shrink-0">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
+            <p class="text-xs font-extrabold leading-tight" id="shopping-banner-text"></p>
+          </div>
+        </div>
+      </header>
+
+      <!-- Input Box mit Mengen-Counter -->
+      <!-- Hinzufügen-Fenster: erscheint erst nach Tipp auf den runden Button unten rechts -->
+      <div id="add-backdrop" class="hidden fixed inset-0 z-40 bg-amber-950/40"></div>
+      <form id="add-item-form" aria-label="Artikel hinzufügen" aria-hidden="true" class="sheet sheet-closed fixed bottom-0 left-0 right-0 z-50 w-full max-w-md mx-auto bg-white p-4 rounded-t-[2rem] border-2 border-b-0 border-orange-100 space-y-3 overflow-y-auto" style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px)); box-shadow: 0 -12px 32px -8px rgba(120, 80, 40, 0.3);">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-extrabold text-amber-950">Was fehlt?</h2>
+          <button type="button" id="add-close" aria-label="Schließen" class="w-9 h-9 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 font-extrabold flex items-center justify-center transition">✕</button>
+        </div>
+        <p id="add-feedback" class="hidden text-sm font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2"></p>
+        <div class="flex gap-2">
+          <input type="text" id="item-title" required placeholder="Was fehlt? (z. B. Brot, Äpfel)" 
+            class="flex-1 min-w-0 px-4 py-3 rounded-2xl bg-orange-50/60 border border-orange-100 text-amber-950 placeholder-amber-900/40 text-base font-bold outline-none focus:bg-white focus:border-orange-400 transition">
+          
+          <div class="flex items-center bg-orange-100/70 rounded-2xl p-1 border border-orange-200/80 shrink-0">
+            <button type="button" id="qty-minus" class="w-8 h-9 rounded-xl bg-white hover:bg-orange-50 active:scale-90 text-orange-700 font-extrabold text-lg flex items-center justify-center shadow-sm transition">−</button>
+            <span id="qty-value" class="w-8 text-center font-extrabold text-base text-amber-950 select-none">1</span>
+            <button type="button" id="qty-plus" class="w-8 h-9 rounded-xl bg-white hover:bg-orange-50 active:scale-90 text-orange-700 font-extrabold text-lg flex items-center justify-center shadow-sm transition">+</button>
+          </div>
+        </div>
+
+        <!-- Kategorie-Auswahl (Auto erkennt die Kategorie anhand des Artikelnamens) -->
+        <div id="category-chips" class="no-scrollbar flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-0.5" role="radiogroup" aria-label="Kategorie"></div>
+
+        <div class="flex gap-2">
+          <input type="text" id="item-note" placeholder="Kleine Notiz (z. B. welcher Laden oder Sorte)" 
+            class="flex-1 px-3.5 py-2.5 rounded-xl bg-stone-50 text-amber-950 placeholder-amber-900/40 text-sm font-semibold outline-none focus:bg-white focus:border-orange-300 border border-stone-200/80 transition">
+          <button type="submit" 
+            class="px-4 py-2.5 bg-orange-500 hover:bg-orange-600 active:scale-95 text-white font-extrabold rounded-xl text-sm transition shrink-0 shadow-sm shadow-orange-500/20">
+            + Drauf
+          </button>
+        </div>
+      </form>
+
+      <!-- Offene Artikel, gruppiert nach Kategorie in Supermarkt-Laufreihenfolge -->
+      <div class="flex-1 space-y-5" id="open-items-list"></div>
+
+      <!-- Leer-Zustand -->
+      <div id="empty-state" class="hidden text-center py-10 px-4 bg-white/60 rounded-3xl border-2 border-dashed border-orange-200/70 my-2">
+        <div class="text-4xl mb-2">🎉</div>
+        <p class="text-base font-extrabold text-amber-900">Der Kühlschrank ist voll!</p>
+        <p class="text-xs font-semibold text-amber-700/70 mt-1">Schreib oben einfach drauf, sobald wieder etwas leer wird.</p>
+      </div>
+
+      <!-- Erledigte Artikel -->
+      <div id="done-section" class="hidden mt-6 pt-4 border-t-2 border-orange-100/80">
+        <div class="flex items-center justify-between mb-2.5 px-1">
+          <span class="text-xs font-extrabold uppercase tracking-wider text-amber-800/50">Schon im Einkaufswagen</span>
+          <button id="clear-done-btn" class="text-xs font-bold text-orange-600/70 hover:text-red-600 transition">Aufräumen</button>
+        </div>
+        <div class="space-y-2" id="done-items-list"></div>
+      </div>
+
+      <!-- Platz, damit der FAB den letzten Eintrag nicht verdeckt -->
+      <div class="h-24 shrink-0"></div>
+
+    </div>
+
+    <!-- SCREEN 3: EINKAUFSMODUS (nur die offenen Artikel, zum Abhaken im Laden) -->
+    <div id="shopping-screen" class="hidden flex-1 flex flex-col">
+      <header class="sticky top-3 z-30 bg-emerald-600 text-white p-4 rounded-3xl shadow-lg shadow-emerald-900/20 mb-5">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h1 class="text-2xl font-extrabold leading-tight">🛒 Einkaufsmodus</h1>
+            <p class="text-sm font-semibold text-white/80 truncate" id="shop-family"></p>
+          </div>
+          <button id="shop-end-btn" type="button" class="shrink-0 px-3.5 py-2 rounded-2xl bg-white/20 hover:bg-white/30 active:scale-95 text-sm font-extrabold transition">Beenden</button>
+        </div>
+        <div class="h-2.5 bg-white/25 rounded-full mt-3.5 overflow-hidden">
+          <div id="shop-progress" class="h-full bg-white rounded-full transition-all duration-500" style="width: 0%"></div>
+        </div>
+        <p id="shop-progress-text" class="text-xs font-bold text-white/90 mt-1.5"></p>
+      </header>
+
+      <div class="space-y-5" id="shop-open-list"></div>
+
+      <div id="shop-done-section" class="hidden mt-6 pt-4 border-t-2 border-orange-100/80">
+        <p class="text-xs font-extrabold uppercase tracking-wider text-amber-800/50 mb-2.5 px-1">Schon im Wagen</p>
+        <div class="space-y-2" id="shop-done-list"></div>
+      </div>
+      <div class="h-10 shrink-0"></div>
+    </div>
+
+    <!-- SCREEN 4: ALLES EINGEKAUFT -->
+    <div id="finish-screen" class="hidden flex-1 flex flex-col justify-center items-center text-center my-auto px-2">
+      <div class="text-7xl mb-4">🎉</div>
+      <h1 class="text-3xl font-extrabold text-amber-950 leading-tight">Du hast alles eingekauft!</h1>
+      <p id="finish-sub" class="text-amber-800/70 font-semibold mt-2"></p>
+      <button id="finish-btn" type="button" class="mt-8 w-full py-4 bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] text-white font-extrabold rounded-2xl shadow-md shadow-emerald-500/25 transition text-base">Zurück zur Liste</button>
+      <button id="finish-clean-btn" type="button" class="mt-3 w-full py-3 text-orange-700 font-bold text-sm rounded-2xl hover:bg-orange-50 transition">Zurück und erledigte Artikel aufräumen</button>
+    </div>
+  </div>
+
+  <!-- Runder Button unten rechts: öffnet das Hinzufügen-Fenster -->
+  <button id="fab" type="button" aria-label="Neuen Artikel hinzufügen"
+    class="fab hidden fixed z-40 w-16 h-16 rounded-full bg-orange-500 hover:bg-orange-600 active:scale-90 text-white shadow-xl shadow-orange-500/40 ring-4 ring-white/80 flex items-center justify-center transition-all duration-300">
+    <svg class="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+
+  <div id="toast" class="hidden fixed left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-amber-950 text-white text-sm font-bold shadow-xl" style="bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px));" role="status"></div>
+
+  <script>
+    const firebaseConfig = {
+      databaseURL: "https://familienkorb-default-rtdb.europe-west1.firebasedatabase.app"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const FUNNY_NAMES = [
+      'Schlauer Fuchs 🦊', 'Küchen-Panda 🐼', 'Krümelmonster 🍪', 
+      'Snack-Detektiv 🕵️', 'Fleißiges Bienchen 🐝', 'Vitamin-Held 🥑', 
+      'Kühlschrank-Pirat 🏴‍☠️', 'Frühstücks-Bär 🐻'
+    ];
+
+    // Kategorien in typischer Supermarkt-Laufreihenfolge (Eingang → Kasse)
+    const CATEGORIES = [
+      { key: 'produce', label: 'Obst & Gemüse', short: 'Obst & Gemüse', emoji: '🥦',
+        badge: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-800',
+        keywords: ['apfel', 'äpfel', 'banane', 'birne', 'orange', 'mandarine', 'zitrone', 'limette', 'traube', 'beere', 'kiwi', 'mango', 'ananas', 'melone', 'pfirsich', 'nektarine', 'pflaume', 'kirsche', 'obst', 'gemüse', 'salat', 'gurke', 'tomate', 'paprika', 'zwiebel', 'knoblauch', 'kartoffel', 'möhre', 'karotte', 'brokkoli', 'blumenkohl', 'zucchini', 'aubergine', 'spinat', 'lauch', 'porree', 'pilz', 'champignon', 'avocado', 'kräuter', 'petersilie', 'basilikum', 'schnittlauch', 'ingwer', 'kohl', 'radieschen', 'sellerie', 'rucola', 'spargel', 'kürbis', 'süßkartoffel', 'rote bete'] },
+      { key: 'bakery', label: 'Brot & Backwaren', short: 'Backwaren', emoji: '🥖',
+        badge: 'bg-amber-100 text-amber-700', text: 'text-amber-800',
+        keywords: ['brot', 'brötchen', 'semmel', 'baguette', 'toast', 'croissant', 'brezel', 'laugen', 'kuchen', 'wrap', 'tortilla', 'knäcke', 'zwieback', 'ciabatta', 'bagel'] },
+      { key: 'fresh', label: 'Frische & Milchprodukte', short: 'Frische', emoji: '🧀',
+        badge: 'bg-sky-100 text-sky-700', text: 'text-sky-800',
+        keywords: ['milch', 'käse', 'joghurt', 'jogurt', 'quark', 'butter', 'sahne', 'schmand', 'frischkäse', 'mozzarella', 'feta', 'parmesan', 'gouda', 'eier', 'wurst', 'schinken', 'salami', 'fleisch', 'hack', 'hähnchen', 'hühnchen', 'pute', 'steak', 'schnitzel', 'lachs', 'fisch', 'tofu', 'aufschnitt', 'margarine', 'skyr', 'kefir', 'pudding', 'speck', 'bacon'],
+        words: ['ei'] },
+      { key: 'frozen', label: 'Tiefkühl', short: 'Tiefkühl', emoji: '🧊',
+        badge: 'bg-indigo-100 text-indigo-700', text: 'text-indigo-800',
+        strong: ['tiefkühl', 'tk-', 'gefroren'],
+        keywords: ['pizza', 'pommes', 'fischstäbchen', 'eiswürfel', 'speiseeis', 'eiscreme'],
+        words: ['eis', 'tk'] },
+      { key: 'pantry', label: 'Vorräte & Sonstiges', short: 'Vorräte', emoji: '🥫',
+        badge: 'bg-orange-100 text-orange-700', text: 'text-orange-800',
+        keywords: ['nudel', 'pasta', 'spaghetti', 'penne', 'mehl', 'zucker', 'salz', 'pfeffer', 'öl', 'essig', 'müsli', 'haferflocken', 'cornflakes', 'kaffee', 'kakao', 'honig', 'marmelade', 'nutella', 'konserve', 'dose', 'tomatenmark', 'passata', 'linsen', 'bohnen', 'ketchup', 'senf', 'mayo', 'brühe', 'gewürz', 'chips', 'schoko', 'keks', 'gummibär', 'süßigkeit', 'nüsse', 'soße', 'sauce', 'backpulver', 'hefe', 'erdnuss', 'mais'],
+        words: ['reis', 'tee'] },
+      { key: 'drinks', label: 'Getränke', short: 'Getränke', emoji: '🧃',
+        badge: 'bg-rose-100 text-rose-700', text: 'text-rose-800',
+        keywords: ['wasser', 'saft', 'schorle', 'cola', 'limo', 'bier', 'wein', 'sekt', 'sprudel', 'mineral', 'eistee', 'smoothie', 'fanta', 'sprite', 'energy'] },
+      { key: 'household', label: 'Drogerie & Haushalt', short: 'Drogerie', emoji: '🧻',
+        badge: 'bg-violet-100 text-violet-700', text: 'text-violet-800',
+        keywords: ['klopapier', 'toilettenpapier', 'küchenrolle', 'taschentuch', 'spülmittel', 'waschmittel', 'shampoo', 'duschgel', 'seife', 'zahnpasta', 'zahnbürste', 'deo', 'creme', 'windel', 'müllbeutel', 'schwamm', 'putzmittel', 'reiniger', 'alufolie', 'frischhaltefolie', 'backpapier', 'batterie', 'spültabs', 'weichspüler', 'rasier', 'pflaster'] }
+    ];
+    const CATEGORY_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
+    const FALLBACK_CATEGORY = 'pantry';
+
+    // Erkennt die Kategorie anhand des Artikelnamens. Bei deutschen Komposita
+    // bestimmt das letzte Wortteil die Bedeutung ("Apfelsaft" → Getränke),
+    // daher gewinnt der Treffer, der am weitesten hinten endet.
+    function detectCategory(title) {
+      const text = String(title || '').toLowerCase();
+      if (!text.trim()) return FALLBACK_CATEGORY;
+
+      for (const cat of CATEGORIES) {
+        if (cat.strong && cat.strong.some(s => text.includes(s))) return cat.key;
+      }
+
+      let best = null;
+      const consider = (key, end, len) => {
+        if (!best || end > best.end || (end === best.end && len > best.len)) best = { key, end, len };
+      };
+
+      const tokenRe = /[a-zäöüß]+/g;
+      let m;
+      const tokens = [];
+      while ((m = tokenRe.exec(text))) tokens.push({ word: m[0], end: m.index + m[0].length });
+
+      CATEGORIES.forEach(cat => {
+        (cat.keywords || []).forEach(kw => {
+          const idx = text.lastIndexOf(kw);
+          if (idx !== -1) consider(cat.key, idx + kw.length, kw.length);
+        });
+        (cat.words || []).forEach(w => {
+          tokens.forEach(t => { if (t.word === w) consider(cat.key, t.end, w.length); });
+        });
+      });
+
+      return best ? best.key : FALLBACK_CATEGORY;
+    }
+
+    function getItemCategory(item) {
+      return CATEGORY_BY_KEY[item.category] ? item.category : detectCategory(item.title);
+    }
+
+    // Stabile Avatar-Farbe pro Name
+    const AVATAR_COLORS = ['bg-rose-400', 'bg-sky-500', 'bg-emerald-500', 'bg-violet-500', 'bg-amber-500', 'bg-teal-500', 'bg-pink-500', 'bg-indigo-500'];
+    function avatarColor(name) {
+      let h = 0;
+      for (const ch of String(name)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+      return AVATAR_COLORS[h % AVATAR_COLORS.length];
+    }
+    function avatarInitial(name) {
+      const letter = String(name).match(/[A-Za-zÄÖÜäöüß0-9]/);
+      return letter ? letter[0].toUpperCase() : (Array.from(String(name).trim())[0] || '?');
+    }
+
+    function getStarterItems() {
+      return {
+        'item_1': {
+          id: 'item_1',
+          title: 'Beispiel-Lebensmittel',
+          qty: 2,
+          note: 'Hier kannst du eine kleine Notiz hinterlassen',
+          author: 'Mama',
+          category: 'fresh',
+          done: false,
+          createdAt: 4
+        },
+        'item_2': {
+          id: 'item_2',
+          title: 'Weiteres Lebensmittel',
+          qty: 1,
+          note: 'z. B. aus welchem Laden oder welche Sorte',
+          author: 'Papa',
+          category: 'produce',
+          done: false,
+          createdAt: 3
+        },
+        'item_3': {
+          id: 'item_3',
+          title: 'Bereits abgehakter Eintrag',
+          qty: 1,
+          note: '',
+          author: 'Mama',
+          done: true,
+          createdAt: 2
+        },
+        'item_4': {
+          id: 'item_4',
+          title: 'Noch ein erledigter Einkauf',
+          qty: 3,
+          note: '',
+          author: 'Papa',
+          done: true,
+          createdAt: 1
+        }
+      };
+    }
+
+    const loginScreen = document.getElementById('login-screen');
+    const listScreen = document.getElementById('list-screen');
+    const loginForm = document.getElementById('login-form');
+    const addItemForm = document.getElementById('add-item-form');
+    const openItemsList = document.getElementById('open-items-list');
+    const doneItemsList = document.getElementById('done-items-list');
+    const doneSection = document.getElementById('done-section');
+    const emptyState = document.getElementById('empty-state');
+
+    let currentQty = 1;
+    let session = JSON.parse(localStorage.getItem('family_korb_session')) || null;
+    let currentFamilyData = { shopper: null, itemsMap: {}, presence: {} };
+    let currentFamilyRef = null;
+    let selectedCategory = 'auto';
+
+    // Geräte-ID für die Präsenz-Anzeige (ein Eintrag pro Gerät/Tab)
+    let clientId = localStorage.getItem('family_korb_client');
+    if (!clientId) {
+      clientId = 'c_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
+      localStorage.setItem('family_korb_client', clientId);
+    }
+    const PRESENCE_TIMEOUT = 3 * 60 * 1000;
+    let presenceRef = null;
+    let presenceHeartbeat = null;
+    let serverTimeOffset = 0;
+    const knownAvatars = new Set();
+
+    db.ref('.info/serverTimeOffset').on('value', (snap) => { serverTimeOffset = snap.val() || 0; });
+
+    function writePresence() {
+      if (!presenceRef || !session) return;
+      // Komplettes Objekt per set(), damit der Eintrag auch nach einem Reset wieder vollständig ist
+      presenceRef.set({ name: session.name, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    }
+
+    function joinPresence() {
+      if (!currentFamilyRef || !session) return;
+      presenceRef = currentFamilyRef.child('presence').child(clientId);
+      presenceRef.onDisconnect().remove();
+      writePresence();
+      clearInterval(presenceHeartbeat);
+      presenceHeartbeat = setInterval(writePresence, 60 * 1000);
+    }
+
+    function leavePresence() {
+      clearInterval(presenceHeartbeat);
+      presenceHeartbeat = null;
+      if (presenceRef) {
+        presenceRef.onDisconnect().cancel();
+        presenceRef.remove();
+        presenceRef = null;
+      }
+    }
+
+    const tabJoin = document.getElementById('tab-join');
+    const tabCreate = document.getElementById('tab-create');
+    const authMode = document.getElementById('auth-mode');
+    const modeHint = document.getElementById('mode-hint');
+    const submitLoginBtn = document.getElementById('submit-login-btn');
+
+    const familyField = document.getElementById('family-field');
+    const pinField = document.getElementById('pin-field');
+    const pinHint = document.getElementById('pin-hint');
+    const pinInput = document.getElementById('family-pin');
+    const loginError = document.getElementById('login-error');
+    const inviteBox = document.getElementById('invite-box');
+    let pendingInvite = null; // { key, token, displayName } wenn ein Einladungslink geöffnet wurde
+
+    function showLoginError(msg) {
+      loginError.textContent = msg || '';
+      loginError.classList.toggle('hidden', !msg);
+    }
+
+    function setAuthMode(mode) {
+      authMode.value = mode;
+      const on = 'py-2.5 rounded-xl font-bold text-sm transition bg-white text-orange-600 shadow-sm';
+      const off = 'py-2.5 rounded-xl font-bold text-sm transition text-amber-800/60 hover:text-amber-900';
+      tabJoin.className = mode === 'join' ? on : off;
+      tabCreate.className = mode === 'create' ? on : off;
+      if (mode === 'join') {
+        modeHint.textContent = 'Gib euren Nachnamen und die PIN eurer Familie ein.';
+        pinHint.textContent = 'Die PIN kennt jeder, der schon in eurer Familie ist.';
+        submitLoginBtn.textContent = 'Zur Familienliste ➔';
+      } else {
+        modeHint.textContent = 'Erstellt einen frischen Einkaufszettel mit Beispiel-Einträgen.';
+        pinHint.textContent = 'Wähle eine PIN, die sich alle merken können. Sie schützt eure Liste.';
+        submitLoginBtn.textContent = 'Familie neu gründen ✨';
+      }
+      showLoginError('');
+    }
+
+    // Einladungsmodus: nur der Name wird abgefragt, der Link ersetzt Familienname + PIN
+    function setInviteMode(invite) {
+      pendingInvite = invite;
+      const on = !!invite;
+      inviteBox.classList.toggle('hidden', !on);
+      familyField.classList.toggle('hidden', on);
+      pinField.classList.toggle('hidden', on);
+      document.querySelector('#login-screen .grid').classList.toggle('hidden', on);
+      if (on) {
+        document.getElementById('invite-family-name').textContent = 'Familie ' + invite.displayName;
+        submitLoginBtn.textContent = 'Beitreten ➔';
+      } else {
+        setAuthMode('join');
+      }
+      showLoginError('');
+    }
+
+    tabJoin.onclick = () => setAuthMode('join');
+    tabCreate.onclick = () => setAuthMode('create');
+    document.getElementById('invite-cancel').onclick = () => {
+      clearInviteHash();
+      setInviteMode(null);
+    };
+    pinInput.addEventListener('input', () => {
+      pinInput.value = pinInput.value.replace(/\D/g, '').slice(0, 4);
+    });
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => el.classList.add('hidden'), 2600);
+    }
+
+    const qtyValue = document.getElementById('qty-value');
+    document.getElementById('qty-minus').onclick = () => {
+      if (currentQty > 1) {
+        currentQty--;
+        qtyValue.textContent = currentQty;
+      }
+    };
+    document.getElementById('qty-plus').onclick = () => {
+      currentQty++;
+      qtyValue.textContent = currentQty;
+    };
+
+    // --- Kategorie-Chips im Eingabeformular ---
+    const categoryChips = document.getElementById('category-chips');
+    const titleInput = document.getElementById('item-title');
+
+    function renderCategoryChips() {
+      const detected = CATEGORY_BY_KEY[detectCategory(titleInput.value)];
+      const hasTitle = titleInput.value.trim().length > 0;
+      const chipBase = 'shrink-0 px-3 py-1.5 rounded-xl text-xs font-extrabold border transition active:scale-95 whitespace-nowrap';
+      const active = 'bg-orange-500 border-orange-500 text-white shadow-sm shadow-orange-500/20';
+      const idle = 'bg-orange-50/70 border-orange-100 text-amber-800/80 hover:bg-orange-100';
+
+      const chips = [{ key: 'auto', text: hasTitle ? `✨ Auto · ${detected.emoji} ${detected.short}` : '✨ Auto' }]
+        .concat(CATEGORIES.map(c => ({ key: c.key, text: `${c.emoji} ${c.short}` })));
+
+      categoryChips.innerHTML = chips.map(c => `
+        <button type="button" role="radio" aria-checked="${selectedCategory === c.key}" data-cat="${c.key}"
+          class="${chipBase} ${selectedCategory === c.key ? active : idle}">${escapeHtml(c.text)}</button>
+      `).join('');
+    }
+
+    categoryChips.onclick = (e) => {
+      const btn = e.target.closest('[data-cat]');
+      if (!btn) return;
+      selectedCategory = btn.dataset.cat;
+      renderCategoryChips();
+    };
+
+    // --- Hinzufügen-Fenster: kommt erst nach Tipp auf den runden Button ---
+    const fab = document.getElementById('fab');
+    const addBackdrop = document.getElementById('add-backdrop');
+    const addFeedback = document.getElementById('add-feedback');
+    let addSheetOpen = false;
+
+    titleInput.addEventListener('input', renderCategoryChips);
+
+    // Hält das Fenster über der Handy-Tastatur
+    function positionAddSheet() {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      const keyboard = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      addItemForm.style.bottom = keyboard + 'px';
+      addItemForm.style.maxHeight = Math.floor(vv.height * 0.92) + 'px';
+    }
+
+    function openAddSheet() {
+      addSheetOpen = true;
+      addItemForm.inert = false;
+      addItemForm.removeAttribute('aria-hidden');
+      addItemForm.classList.remove('sheet-closed');
+      addBackdrop.classList.remove('hidden');
+      fab.classList.add('invisible');
+      positionAddSheet();
+      // Fokus direkt im Tap-Handler, damit iOS/Android die Tastatur öffnen
+      titleInput.focus({ preventScroll: true });
+    }
+
+    function closeAddSheet() {
+      if (!addSheetOpen) return;
+      addSheetOpen = false;
+      document.getElementById('item-title').blur();
+      document.getElementById('item-note').blur();
+      addItemForm.classList.add('sheet-closed');
+      addItemForm.setAttribute('aria-hidden', 'true');
+      addItemForm.inert = true;
+      addItemForm.style.bottom = '';
+      addBackdrop.classList.add('hidden');
+      addFeedback.classList.add('hidden');
+      fab.classList.remove('invisible');
+    }
+
+    addItemForm.inert = true;
+    fab.onclick = openAddSheet;
+    addBackdrop.onclick = closeAddSheet;
+    document.getElementById('add-close').onclick = closeAddSheet;
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAddSheet(); });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', positionAddSheet);
+      window.visualViewport.addEventListener('scroll', positionAddSheet);
+    }
+
+    function showAddFeedback(text) {
+      addFeedback.textContent = '✓ ' + text + ' ist drauf';
+      addFeedback.classList.remove('hidden');
+      clearTimeout(showAddFeedback._t);
+      showAddFeedback._t = setTimeout(() => addFeedback.classList.add('hidden'), 2200);
+    }
+
+    renderCategoryChips();
+
+    db.ref('.info/connected').on('value', (snap) => {
+      const isOnline = snap.val() === true;
+      // Nach Verbindungsabbruch Präsenz neu anmelden (onDisconnect hat sie entfernt)
+      if (isOnline && presenceRef) joinPresence();
+      const dot = document.getElementById('live-indicator-dot');
+      const text = document.getElementById('live-indicator-text');
+      if (dot && text) {
+        if (isOnline) {
+          dot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
+          text.textContent = 'Live';
+          text.className = 'text-[11px] font-bold text-emerald-600';
+        } else {
+          dot.className = 'w-2 h-2 rounded-full bg-amber-400';
+          text.textContent = 'Offline / Verbinde...';
+          text.className = 'text-[11px] font-bold text-amber-600';
+        }
+      }
+    });
+
+    function familyKeyOf(name) {
+      return String(name).toLowerCase().trim().replace(/[.#$\[\]\/]/g, '_');
+    }
+
+    function connectToFamilyCloud(familyName) {
+      if (currentFamilyRef) currentFamilyRef.off();
+      leavePresence();
+      let presenceJoined = false;
+
+      currentFamilyRef = db.ref('families/' + familyKeyOf(familyName));
+
+      currentFamilyRef.on('value', (snapshot) => {
+        const val = snapshot.val();
+        if (val) {
+          const rawItems = val.items || {};
+          const normalizedMap = {};
+
+          Object.entries(rawItems).forEach(([key, item]) => {
+            if (item && typeof item === 'object') {
+              const itemId = String(item.id || key);
+              normalizedMap[itemId] = {
+                ...item,
+                id: itemId,
+                createdAt: item.createdAt || Number(key) || 0
+              };
+            }
+          });
+
+          currentFamilyData = {
+            shopper: val.shopper || null,
+            itemsMap: normalizedMap,
+            presence: val.presence || {}
+          };
+        } else {
+          // Die Familie gibt es nicht (mehr), z. B. weil sie in der Datenbank gelöscht wurde.
+          // Nichts neu anlegen, sondern zurück zum Login.
+          currentFamilyRef.off();
+          currentFamilyRef = null;
+          leavePresence();
+          session = null;
+          localStorage.removeItem('family_korb_session');
+          renderUI();
+          showLoginError('Diese Familie gibt es nicht mehr. Gründe sie neu oder tritt einer anderen bei.');
+          return;
+        }
+        // Präsenz erst nach dem ersten Snapshot anmelden, damit eine neue Familie
+        // nicht fälschlich als "existiert schon" erkannt wird
+        if (!presenceJoined) {
+          presenceJoined = true;
+          joinPresence();
+        }
+        renderUI();
+      });
+    }
+
+    function getSortedItemsArray() {
+      return Object.values(currentFamilyData.itemsMap).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    }
+
+    function renderAvatars() {
+      const bar = document.getElementById('avatar-bar');
+      const now = Date.now() + serverTimeOffset;
+
+      // Ein Avatar pro Name; ich selbst immer zuerst
+      const names = new Set();
+      Object.values(currentFamilyData.presence || {}).forEach(p => {
+        if (p && p.name && typeof p.lastSeen === 'number' && now - p.lastSeen < PRESENCE_TIMEOUT) names.add(p.name);
+      });
+      names.delete(session.name);
+      const members = [session.name, ...Array.from(names).sort((a, b) => a.localeCompare(b, 'de'))];
+
+      const MAX_VISIBLE = 4;
+      const visible = members.length > MAX_VISIBLE ? members.slice(0, MAX_VISIBLE - 1) : members;
+      const hiddenCount = members.length - visible.length;
+
+      bar.title = members.length === 1 ? 'Nur du bist gerade da' : `${members.length} gerade im Zettel: ${members.join(', ')}`;
+      bar.innerHTML = '';
+
+      visible.forEach((name, i) => {
+        const isMe = name === session.name;
+        const isShopper = currentFamilyData.shopper === name;
+        const el = document.createElement('div');
+        el.className = `relative w-8 h-8 rounded-full ring-2 ${isMe ? 'ring-orange-300' : 'ring-white'} ${avatarColor(name)} text-white text-xs font-extrabold flex items-center justify-center shadow-sm select-none`;
+        el.style.zIndex = String(10 - i);
+        el.title = isMe ? `${name} (du)` : name;
+        el.innerHTML = `
+          ${escapeHtml(avatarInitial(name))}
+          ${isShopper
+            ? '<span class="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-white text-[9px] flex items-center justify-center shadow">🛒</span>'
+            : '<span class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-white"></span>'}
+        `;
+        if (!knownAvatars.has(name)) el.classList.add('avatar-pop');
+        bar.appendChild(el);
+      });
+
+      if (hiddenCount > 0) {
+        const more = document.createElement('div');
+        more.className = 'relative w-8 h-8 rounded-full ring-2 ring-white bg-orange-100 text-orange-700 text-[11px] font-extrabold flex items-center justify-center shadow-sm';
+        more.textContent = `+${hiddenCount}`;
+        bar.appendChild(more);
+      }
+
+      knownAvatars.clear();
+      members.forEach(n => knownAvatars.add(n));
+    }
+
+    const shoppingScreen = document.getElementById('shopping-screen');
+    const finishScreen = document.getElementById('finish-screen');
+    const shopOpenList = document.getElementById('shop-open-list');
+    const shopDoneList = document.getElementById('shop-done-list');
+    const shopDoneSection = document.getElementById('shop-done-section');
+    let lastScreen = null;
+
+    function categoryHeaderHtml(cat, count) {
+      return `
+        <div class="flex items-center gap-2 mb-2 px-1">
+          <span class="w-7 h-7 rounded-xl ${cat.badge} flex items-center justify-center text-sm shadow-inner">${cat.emoji}</span>
+          <h2 class="text-xs font-extrabold uppercase tracking-wider ${cat.text}">${cat.label}</h2>
+          <span class="text-[11px] font-extrabold ${cat.badge} px-1.5 py-0.5 rounded-md">${count}</span>
+          <span class="flex-1 h-px bg-orange-100 ml-1"></span>
+        </div>`;
+    }
+
+    function shoppingRowHtml(item) {
+      return `
+        <button type="button" onclick="toggleItem('${escapeAttr(item.id)}')" class="item-card w-full text-left bg-white p-4 rounded-2xl soft-shadow border-2 border-orange-100/80 flex items-center gap-4 active:scale-[0.98]">
+          <span class="w-9 h-9 rounded-full border-[3px] border-emerald-400 shrink-0"></span>
+          <span class="flex-1 min-w-0">
+            <span class="block font-extrabold text-amber-950 text-lg leading-snug break-words">${escapeHtml(item.title)}</span>
+            ${item.note ? `<span class="inline-block text-xs text-orange-800 bg-orange-100/70 px-2.5 py-0.5 rounded-lg mt-1 font-bold">📍 ${escapeHtml(item.note)}</span>` : ''}
+          </span>
+          <span class="shrink-0 font-extrabold text-base text-amber-900 bg-orange-50 border border-orange-200/70 px-3 py-1.5 rounded-xl">${item.qty || 1}x</span>
+        </button>`;
+    }
+
+    function renderShoppingScreen(openItems, doneItems) {
+      const total = openItems.length + doneItems.length;
+      document.getElementById('shop-family').textContent = `Familie ${session.family}`;
+      document.getElementById('shop-progress').style.width = (total ? Math.round(doneItems.length / total * 100) : 0) + '%';
+      document.getElementById('shop-progress-text').textContent = `${doneItems.length} von ${total} erledigt`;
+
+      const groups = {};
+      openItems.forEach(item => {
+        const key = getItemCategory(item);
+        (groups[key] = groups[key] || []).push(item);
+      });
+
+      shopOpenList.innerHTML = '';
+      CATEGORIES.forEach(cat => {
+        const items = groups[cat.key];
+        if (!items) return;
+        const section = document.createElement('section');
+        section.innerHTML = categoryHeaderHtml(cat, items.length) +
+          `<div class="space-y-2.5">${items.map(shoppingRowHtml).join('')}</div>`;
+        shopOpenList.appendChild(section);
+      });
+
+      shopDoneList.innerHTML = doneItems.map(item => `
+        <button type="button" onclick="toggleItem('${escapeAttr(item.id)}')" class="item-card w-full text-left bg-orange-50/60 p-3 rounded-2xl flex items-center gap-3 opacity-75 border border-orange-100">
+          <span class="w-6 h-6 rounded-full bg-emerald-500 text-white text-xs font-bold flex items-center justify-center shrink-0">✓</span>
+          <span class="flex-1 min-w-0 text-amber-900/60 line-through text-sm font-bold">${item.qty || 1}x ${escapeHtml(item.title)}</span>
+          <span class="text-[11px] font-bold text-orange-600/70">Zurückholen</span>
+        </button>`).join('');
+      shopDoneSection.classList.toggle('hidden', doneItems.length === 0);
+    }
+
+    function renderFinishScreen(doneItems) {
+      const n = doneItems.length;
+      document.getElementById('finish-sub').textContent = n > 0
+        ? `${n} Artikel abgehakt. Die anderen sehen, dass du fertig bist.`
+        : 'Auf der Liste steht nichts mehr.';
+    }
+
+    function renderUI() {
+      if (!session) {
+        loginScreen.classList.remove('hidden');
+        listScreen.classList.add('hidden');
+        shoppingScreen.classList.add('hidden');
+        finishScreen.classList.add('hidden');
+        fab.classList.add('hidden');
+        lastScreen = 'login';
+        return;
+      }
+
+      loginScreen.classList.add('hidden');
+
+      const allItems = getSortedItemsArray();
+      const openItems = allItems.filter(i => !i.done);
+      const doneItems = allItems.filter(i => i.done);
+
+      // Welcher Screen? Wer gerade einkauft, sieht nur den Einkaufsmodus (und am Ende den Fertig-Screen)
+      const iAmShopping = currentFamilyData.shopper === session.name;
+      const screen = !iAmShopping ? 'list' : (openItems.length === 0 ? 'finish' : 'shopping');
+      if (screen !== lastScreen) {
+        window.scrollTo(0, 0);
+        lastScreen = screen;
+      }
+
+      listScreen.classList.toggle('hidden', screen !== 'list');
+      shoppingScreen.classList.toggle('hidden', screen !== 'shopping');
+      finishScreen.classList.toggle('hidden', screen !== 'finish');
+
+      if (screen !== 'list') {
+        closeAddSheet();
+        fab.classList.add('hidden');
+        if (screen === 'shopping') renderShoppingScreen(openItems, doneItems);
+        else renderFinishScreen(doneItems);
+        return;
+      }
+
+      if (fab.classList.contains('hidden')) {
+        fab.classList.remove('hidden');
+        fab.classList.add('fab-in');
+      }
+
+      document.getElementById('display-family').textContent = `Familie ${session.family}`;
+      document.getElementById('display-user').textContent = session.name;
+      renderAvatars();
+
+      const shopBtn = document.getElementById('shopping-mode-btn');
+      const shopBanner = document.getElementById('shopping-banner');
+      const shopBannerText = document.getElementById('shopping-banner-text');
+
+      if (currentFamilyData.shopper) {
+        // Jemand anderes ist gerade im Laden
+        shopBanner.classList.remove('hidden');
+        shopBtn.className = 'px-3.5 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition shrink-0 bg-emerald-100 text-emerald-800';
+        shopBtn.innerHTML = `<span>🛒 ${escapeHtml(currentFamilyData.shopper)}</span>`;
+        shopBannerText.textContent = `${currentFamilyData.shopper} ist gerade einkaufen! Letzte Wünsche schnell draufschreiben.`;
+      } else {
+        shopBanner.classList.add('hidden');
+        shopBtn.className = 'px-3.5 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-1.5 transition shrink-0 bg-orange-100 hover:bg-orange-200/80 text-orange-800';
+        shopBtn.innerHTML = '<span>🛒 Ich gehe einkaufen</span>';
+      }
+
+      openItemsList.innerHTML = '';
+      doneItemsList.innerHTML = '';
+
+      if (openItems.length === 0) {
+        emptyState.classList.remove('hidden');
+      } else {
+        emptyState.classList.add('hidden');
+
+        // Nach Kategorie gruppieren – Reihenfolge entspricht dem Weg durch den Markt
+        const groups = {};
+        openItems.forEach(item => {
+          const key = getItemCategory(item);
+          (groups[key] = groups[key] || []).push(item);
+        });
+
+        CATEGORIES.forEach(cat => {
+          const items = groups[cat.key];
+          if (!items) return;
+
+          const section = document.createElement('section');
+          section.innerHTML = `
+            <div class="flex items-center gap-2 mb-2 px-1">
+              <span class="w-7 h-7 rounded-xl ${cat.badge} flex items-center justify-center text-sm shadow-inner">${cat.emoji}</span>
+              <h2 class="text-xs font-extrabold uppercase tracking-wider ${cat.text}">${cat.label}</h2>
+              <span class="text-[11px] font-extrabold ${cat.badge} px-1.5 py-0.5 rounded-md">${items.length}</span>
+              <span class="flex-1 h-px bg-orange-100 ml-1"></span>
+            </div>
+            <div class="space-y-2.5"></div>
+          `;
+          const listEl = section.lastElementChild;
+
+          items.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'item-card bg-white p-3.5 sm:p-4 rounded-2xl soft-shadow border-2 border-orange-100/80 flex items-center gap-3';
+            el.innerHTML = `
+              <button onclick="toggleItem('${escapeAttr(item.id)}')" class="w-7 h-7 rounded-full border-2 border-orange-400 hover:bg-orange-50 shrink-0 flex items-center justify-center active:scale-90 transition" title="Abhaken"></button>
+              <div class="flex-1 min-w-0 cursor-pointer" onclick="editItem('${escapeAttr(item.id)}')">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <p class="font-extrabold text-amber-950 text-base leading-snug">${escapeHtml(item.title)}</p>
+                  <span class="text-[11px] font-bold text-amber-700/60 bg-orange-50 px-2 py-0.5 rounded-lg">${escapeHtml(item.author)}</span>
+                </div>
+                ${item.note ? `<p class="text-xs text-orange-800 bg-orange-100/70 inline-block px-2.5 py-0.5 rounded-lg mt-1 font-bold">📍 ${escapeHtml(item.note)}</p>` : ''}
+              </div>
+              <div class="flex items-center bg-orange-50 rounded-xl p-0.5 border border-orange-200/70 shrink-0">
+                <button onclick="changeItemQty('${escapeAttr(item.id)}', -1)" class="w-7 h-7 rounded-lg text-orange-700 hover:bg-white font-extrabold text-sm flex items-center justify-center">−</button>
+                <span class="px-2 font-extrabold text-sm text-amber-950">${item.qty || 1}x</span>
+                <button onclick="changeItemQty('${escapeAttr(item.id)}', 1)" class="w-7 h-7 rounded-lg text-orange-700 hover:bg-white font-extrabold text-sm flex items-center justify-center">+</button>
+              </div>
+              <!-- Bearbeiten (Stift) & Löschen (Kreuz) Buttons -->
+              <div class="flex items-center gap-1 shrink-0 ml-1">
+                <button onclick="editItem('${escapeAttr(item.id)}')" class="w-7 h-7 rounded-lg text-stone-400 hover:text-orange-600 hover:bg-orange-50 flex items-center justify-center text-xs transition" title="Bearbeiten">✎</button>
+                <button onclick="deleteItem('${escapeAttr(item.id)}')" class="w-7 h-7 rounded-lg text-stone-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center text-xs transition" title="Löschen">✕</button>
+              </div>
+            `;
+            listEl.appendChild(el);
+          });
+
+          openItemsList.appendChild(section);
+        });
+      }
+
+      if (doneItems.length > 0) {
+        doneSection.classList.remove('hidden');
+        doneItems.forEach(item => {
+          const el = document.createElement('div');
+          el.className = 'item-card bg-orange-50/60 p-3 rounded-2xl flex items-center gap-3 opacity-75 border border-orange-100';
+          el.innerHTML = `
+            <div onclick="toggleItem('${escapeAttr(item.id)}')" class="w-6 h-6 rounded-full bg-emerald-500 text-white text-xs font-bold flex items-center justify-center shrink-0 cursor-pointer">✓</div>
+            <div class="flex-1 min-w-0 cursor-pointer" onclick="toggleItem('${escapeAttr(item.id)}')">
+              <p class="text-amber-900/60 line-through text-sm font-bold">${item.qty || 1}x ${escapeHtml(item.title)}</p>
+            </div>
+            <button onclick="toggleItem('${escapeAttr(item.id)}')" class="text-[11px] font-bold text-orange-600/70 hover:underline mr-2">Zurückholen</button>
+            <button onclick="deleteItem('${escapeAttr(item.id)}')" class="w-6 h-6 rounded-lg text-stone-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center text-xs transition" title="Löschen">✕</button>
+          `;
+          doneItemsList.appendChild(el);
+        });
+      } else {
+        doneSection.classList.add('hidden');
+      }
+    }
+
+    window.toggleItem = (id) => {
+      if (!currentFamilyRef || !currentFamilyData.itemsMap[id]) return;
+      const currentDone = currentFamilyData.itemsMap[id].done;
+      currentFamilyRef.child('items').child(String(id)).update({
+        done: !currentDone
+      });
+    };
+
+    window.changeItemQty = (id, delta) => {
+      if (!currentFamilyRef || !currentFamilyData.itemsMap[id]) return;
+      const currentItem = currentFamilyData.itemsMap[id];
+      const nextQty = Math.max(1, (currentItem.qty || 1) + delta);
+      currentFamilyRef.child('items').child(String(id)).update({
+        qty: nextQty
+      });
+    };
+
+    // Direktes Bearbeiten per Prompt
+    window.editItem = (id) => {
+      if (!currentFamilyRef || !currentFamilyData.itemsMap[id]) return;
+      const item = currentFamilyData.itemsMap[id];
+      const newTitle = prompt('Artikel bearbeiten:', item.title);
+      if (newTitle === null) return;
+      const trimmed = newTitle.trim();
+      if (!trimmed) return;
+
+      const newNote = prompt('Notiz / Laden anpassen (optional):', item.note || '');
+      if (newNote === null) return;
+
+      const updates = { title: trimmed, note: newNote.trim() };
+      // Automatisch zugeordnete Artikel wandern bei neuem Namen in die passende Kategorie
+      if (!item.categoryManual) updates.category = detectCategory(trimmed);
+
+      currentFamilyRef.child('items').child(String(id)).update(updates);
+    };
+
+    // Einzelnen Eintrag direkt löschen
+    window.deleteItem = (id) => {
+      if (!currentFamilyRef) return;
+      currentFamilyRef.child('items').child(String(id)).remove();
+    };
+
+    // Einkaufsmodus starten (öffnet den eigenen Einkaufs-Screen)
+    document.getElementById('shopping-mode-btn').onclick = () => {
+      if (!currentFamilyRef) return;
+      const shopper = currentFamilyData.shopper;
+      if (!shopper) {
+        const open = Object.values(currentFamilyData.itemsMap).filter(i => !i.done).length;
+        if (open === 0) {
+          showToast('Die Liste ist leer. Schreib erst etwas drauf.');
+          return;
+        }
+        currentFamilyRef.child('shopper').set(session.name);
+      } else if (shopper !== session.name) {
+        if (confirm(`${shopper} ist gerade einkaufen. Einkaufsmodus übernehmen?`)) {
+          currentFamilyRef.child('shopper').set(session.name);
+        }
+      }
+    };
+
+    // Einkauf vorzeitig beenden
+    document.getElementById('shop-end-btn').onclick = () => {
+      if (!currentFamilyRef) return;
+      const open = Object.values(currentFamilyData.itemsMap).filter(i => !i.done).length;
+      if (open > 0) {
+        const rest = open === 1 ? 'Es ist noch 1 Artikel offen.' : `Es sind noch ${open} Artikel offen.`;
+        if (!confirm(`Einkauf beenden? ${rest}`)) return;
+      }
+      currentFamilyRef.child('shopper').set(null);
+    };
+
+    // Fertig-Screen
+    document.getElementById('finish-btn').onclick = () => {
+      if (!currentFamilyRef) return;
+      currentFamilyRef.child('shopper').set(null);
+    };
+
+    document.getElementById('finish-clean-btn').onclick = () => {
+      if (!currentFamilyRef) return;
+      const updates = { shopper: null };
+      Object.values(currentFamilyData.itemsMap).forEach(item => {
+        if (item.done) updates['items/' + item.id] = null;
+      });
+      currentFamilyRef.update(updates);
+    };
+
+    // ---------- Zugang: PIN + Einladungslink ----------
+    function randomToken(len) {
+      const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+      const arr = new Uint8Array(len);
+      crypto.getRandomValues(arr);
+      return Array.from(arr, b => chars[b % chars.length]).join('');
+    }
+
+    async function hashPin(pin, salt) {
+      if (window.crypto && crypto.subtle) {
+        const data = new TextEncoder().encode(salt + ':' + pin);
+        const buf = await crypto.subtle.digest('SHA-256', data);
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      }
+      return 'plain:' + salt + ':' + pin;
+    }
+
+    async function buildAccess(displayName, pin) {
+      const salt = randomToken(12);
+      return { displayName, salt, pinHash: await hashPin(pin, salt), invite: randomToken(12), createdAt: Date.now() };
+    }
+
+    function userError(message, code) {
+      const err = new Error(message);
+      err.code = code || 'user';
+      return err;
+    }
+
+    async function createFamily(displayName, pin) {
+      const key = familyKeyOf(displayName);
+      const existing = await db.ref('families/' + key).once('value');
+      if (existing.exists()) throw userError('Diesen Familiennamen gibt es schon. Tritt bei oder wähle einen anderen Namen.');
+      const access = await buildAccess(displayName, pin);
+      const res = await db.ref('access/' + key).transaction(cur => (cur === null ? access : undefined));
+      if (!res.committed) throw userError('Diesen Familiennamen gibt es schon. Tritt bei oder wähle einen anderen Namen.');
+      await db.ref('families/' + key).set({ createdAt: Date.now(), shopper: null, items: getStarterItems() });
+    }
+
+    async function verifyJoin(displayName, pin) {
+      const key = familyKeyOf(displayName);
+      const notFound = () => userError('Diese Familie gibt es nicht. Tippfehler? Sonst gründe sie neu.');
+      const snap = await db.ref('access/' + key).once('value');
+      if (!snap.exists()) throw notFound();
+      const family = await db.ref('families/' + key).once('value');
+      if (!family.exists()) throw notFound();
+      const a = snap.val();
+      if ((await hashPin(pin, a.salt)) !== a.pinHash) throw userError('Falsche PIN.', 'wrongpin');
+      return a.displayName || displayName;
+    }
+
+    async function verifyInvite(key, token) {
+      const snap = await db.ref('access/' + key).once('value');
+      const a = snap.val();
+      if (!a || a.invite !== token) throw userError('Dieser Einladungslink ist ungültig oder abgelaufen.');
+      return a.displayName || key;
+    }
+
+    function parseInviteHash() {
+      const m = location.hash.match(/^#join=([^.]+)\.([a-z0-9]+)$/i);
+      if (!m) return null;
+      try { return { key: decodeURIComponent(m[1]), token: m[2] }; } catch (e) { return null; }
+    }
+
+    function clearInviteHash() {
+      if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    }
+
+    // Einfache Bremse gegen PIN-Raten (nur im Browser, keine echte Sicherheit)
+    let wrongPinCount = 0;
+    function lockRemainingSec() {
+      const until = Number(localStorage.getItem('family_korb_lock') || 0);
+      return Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    }
+    function registerWrongPin() {
+      wrongPinCount++;
+      if (wrongPinCount >= 5) {
+        wrongPinCount = 0;
+        localStorage.setItem('family_korb_lock', String(Date.now() + 30000));
+      }
+    }
+
+    loginForm.onsubmit = async (e) => {
+      e.preventDefault();
+      showLoginError('');
+
+      const wait = lockRemainingSec();
+      if (wait > 0) {
+        showLoginError(`Zu viele Versuche. Bitte warte noch ${wait} Sekunden.`);
+        return;
+      }
+
+      let name = document.getElementById('user-name').value.trim();
+      if (!name) name = FUNNY_NAMES[Math.floor(Math.random() * FUNNY_NAMES.length)];
+
+      const mode = authMode.value;
+      let rawFamily = '';
+      let pin = '';
+      if (!pendingInvite) {
+        rawFamily = document.getElementById('family-name').value.trim().replace(/^familie\s+/i, '').trim();
+        pin = pinInput.value.trim();
+        if (!rawFamily) { showLoginError('Bitte gib euren Familiennamen ein.'); return; }
+        if (!/^\d{4}$/.test(pin)) { showLoginError('Die PIN besteht aus genau 4 Ziffern.'); return; }
+      }
+
+      const idleLabel = submitLoginBtn.textContent;
+      submitLoginBtn.disabled = true;
+      submitLoginBtn.textContent = 'Einen Moment …';
+
+      try {
+        let familyDisplay;
+        if (pendingInvite) {
+          familyDisplay = await verifyInvite(pendingInvite.key, pendingInvite.token);
+        } else {
+          const formatted = rawFamily.charAt(0).toUpperCase() + rawFamily.slice(1);
+          if (mode === 'create') {
+            await createFamily(formatted, pin);
+            familyDisplay = formatted;
+          } else {
+            familyDisplay = await verifyJoin(formatted, pin);
+          }
+        }
+
+        session = { name, family: familyDisplay };
+        localStorage.setItem('family_korb_session', JSON.stringify(session));
+        wrongPinCount = 0;
+        pinInput.value = '';
+        clearInviteHash();
+        if (pendingInvite) setInviteMode(null);
+
+        document.getElementById('family-name').blur();
+        document.getElementById('user-name').blur();
+        pinInput.blur();
+
+        connectToFamilyCloud(session.family);
+      } catch (err) {
+        if (err.code === 'wrongpin') registerWrongPin();
+        showLoginError(err.code ? err.message : 'Das hat nicht geklappt. Prüfe deine Internetverbindung und versuche es nochmal.');
+        submitLoginBtn.textContent = idleLabel;
+      } finally {
+        submitLoginBtn.disabled = false;
+        if (!session) submitLoginBtn.textContent = idleLabel;
+      }
+    };
+
+    // Einladungslink erzeugen und teilen
+    document.getElementById('invite-btn').onclick = async () => {
+      if (!session) return;
+      const key = familyKeyOf(session.family);
+      try {
+        const snap = await db.ref('access/' + key).once('value');
+        const access = snap.val();
+        if (!access) { showToast('Für diese Familie gibt es keinen Einladungslink.'); return; }
+        const url = `${location.origin}${location.pathname}#join=${encodeURIComponent(key)}.${access.invite}`;
+        const text = `Komm auf unsere Einkaufsliste: Familie ${session.family} 🧺`;
+
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: 'Familien-Korb', text, url });
+            return;
+          } catch (err) {
+            if (err && err.name === 'AbortError') return;
+          }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url);
+          showToast('Einladungslink kopiert ✓');
+        } else {
+          prompt('Link zum Kopieren:', url);
+        }
+      } catch (err) {
+        showToast('Der Link konnte nicht erstellt werden.');
+      }
+    };
+
+    addItemForm.onsubmit = (e) => {
+      e.preventDefault();
+      const titleInput = document.getElementById('item-title');
+      const noteInput = document.getElementById('item-note');
+      const title = titleInput.value.trim();
+      const note = noteInput.value.trim();
+      if (!title || !currentFamilyRef) return;
+
+      const id = 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const isManual = selectedCategory !== 'auto';
+      const newItem = {
+        id,
+        title,
+        qty: currentQty,
+        note,
+        category: isManual ? selectedCategory : detectCategory(title),
+        categoryManual: isManual,
+        author: session.name,
+        done: false,
+        createdAt: Date.now()
+      };
+
+      currentFamilyRef.child('items').child(id).set(newItem);
+
+      // Fenster bleibt offen, damit man mehrere Artikel hintereinander eintragen kann
+      titleInput.value = '';
+      noteInput.value = '';
+      currentQty = 1;
+      qtyValue.textContent = '1';
+      selectedCategory = 'auto';
+      renderCategoryChips();
+      showAddFeedback(title);
+      titleInput.focus({ preventScroll: true });
+    };
+
+    document.getElementById('clear-done-btn').onclick = () => {
+      if (!currentFamilyRef) return;
+      if (!confirm('Alle erledigten Einkäufe endgültig aus der Liste entfernen?')) return;
+
+      const updates = {};
+      Object.values(currentFamilyData.itemsMap).forEach(item => {
+        if (item.done) {
+          updates[item.id] = null;
+        }
+      });
+      currentFamilyRef.child('items').update(updates);
+    };
+
+    document.getElementById('switch-family-btn').onclick = () => {
+      if (currentFamilyRef) currentFamilyRef.off();
+      leavePresence();
+      knownAvatars.clear();
+      session = null;
+      localStorage.removeItem('family_korb_session');
+      renderUI();
+    };
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+
+    function escapeAttr(str) {
+      return String(str).replace(/['"\\]/g, '\\$&');
+    }
+
+    // Prüft beim Start, ob die gespeicherte Familie noch existiert (offline wird niemand ausgesperrt)
+    async function familyStillExists(name) {
+      try {
+        const check = db.ref('access/' + familyKeyOf(name)).once('value').then(snap => snap.exists());
+        const timeout = new Promise(resolve => setTimeout(() => resolve(true), 4000));
+        return await Promise.race([check, timeout]);
+      } catch (e) {
+        return true;
+      }
+    }
+
+    (async function init() {
+      const invite = parseInviteHash();
+      if (!invite) {
+        if (!session) { renderUI(); return; }
+        if (await familyStillExists(session.family)) {
+          connectToFamilyCloud(session.family);
+        } else {
+          session = null;
+          localStorage.removeItem('family_korb_session');
+          renderUI();
+          showLoginError('Diese Familie gibt es nicht (mehr). Gründe sie neu oder tritt einer anderen bei.');
+        }
+        return;
+      }
+
+      // Einladungslink geöffnet
+      if (session && familyKeyOf(session.family) === invite.key) {
+        clearInviteHash();
+        connectToFamilyCloud(session.family);
+        return;
+      }
+      try {
+        const displayName = await verifyInvite(invite.key, invite.token);
+        session = null; // Login-Bildschirm zeigen; eine gespeicherte Anmeldung bleibt unangetastet
+        renderUI();
+        setInviteMode({ ...invite, displayName });
+      } catch (err) {
+        clearInviteHash();
+        if (session) {
+          connectToFamilyCloud(session.family);
+        } else {
+          renderUI();
+          showLoginError(err.code ? err.message : 'Der Einladungslink konnte nicht geprüft werden.');
+        }
+      }
+    })();
+  </script>
+</body>
+</html>
